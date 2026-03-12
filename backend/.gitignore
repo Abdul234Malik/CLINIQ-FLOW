@@ -1,0 +1,27 @@
+# Environment (never commit secrets)
+.env
+.env.local
+.env.*.local
+.env.example
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+
+# Data
+data/
+*.db
+
+# Model cache (Hugging Face downloads on first use)
+model_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
