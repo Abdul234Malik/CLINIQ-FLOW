@@ -16,6 +16,11 @@ from app.schemas.intake import IntakeRequest
 from app.services.nlp.soap_formatter import SOAPFormatter
 from app.services.nlp.symptom_extractor import SymptomExtractor
 from app.services.orchestration.pipeline import process_intake
+from app.services.rag.retriever import (
+    CLARKS_RULE_FORMULA,
+    YOUNGS_RULE_FORMULA,
+    get_dose_guideline_reference,
+)
 from app.utils.auth import AuthContext
 from app.utils.auth import require_role
 from app.utils.errors import error_payload
@@ -31,6 +36,18 @@ FORMULARY = {
     "paracetamol": {"min_mg_per_kg_day": 40.0, "max_mg_per_kg_day": 60.0, "max_daily_mg": 4000.0},
     "ibuprofen": {"min_mg_per_kg_day": 20.0, "max_mg_per_kg_day": 30.0, "max_daily_mg": 2400.0},
     "artemether_lumefantrine": {"min_mg_per_kg_day": 4.0, "max_mg_per_kg_day": 8.0, "max_daily_mg": 480.0},
+}
+
+# Adult total daily doses (mg/day) for Clark's/Young's rule when drug not in pediatric formulary.
+# Clark's: (weight_kg/68) × adult_dose. Young's: [age/(age+12)] × adult_dose.
+ADULT_DOSE_LOOKUP = {
+    "metronidazole": 1500,
+    "ciprofloxacin": 1000,
+    "erythromycin": 1200,
+    "azithromycin": 500,
+    "cotrimoxazole": 960,
+    "co-trimoxazole": 960,
+    "ceftriaxone": 2000,
 }
 
 
@@ -85,14 +102,56 @@ def dose_check_route(
     event_id = str(uuid.uuid4())
 
     if rule is None:
-        # Safe fallback for unknown drugs in blocker pass.
+        # Drug not in formulary: try Clark's or Young's rule if adult dose is known.
+        adult_dose = ADULT_DOSE_LOOKUP.get(drug_key)
+        guideline_ref = get_dose_guideline_reference(use_clarks=True)
+        calc_method: str | None = None
+        rec_min, rec_max, max_daily = 0, payload.chosen_dose_mg_per_day, payload.chosen_dose_mg_per_day
+        warnings_list = []
+
+        if adult_dose is not None:
+            # Apply Clark's Rule (weight known) or Young's Rule (age-based fallback).
+            if payload.weight_kg > 0:
+                # Clark's: (weight_kg / 68) × adult_dose = pediatric_dose
+                estimated = round((payload.weight_kg / 68.0) * adult_dose)
+                # Allow ±25% tolerance
+                rec_min = max(0, round(estimated * 0.75))
+                rec_max = round(estimated * 1.25)
+                max_daily = min(rec_max, round(adult_dose * 1.0))  # cap at adult dose
+                calc_method = "clarks_rule"
+                if payload.chosen_dose_mg_per_day < rec_min:
+                    warnings_list.append("Dose below Clark's Rule estimate (±25% tolerance)")
+                elif payload.chosen_dose_mg_per_day > rec_max:
+                    warnings_list.append("Dose exceeds Clark's Rule estimate (±25% tolerance)")
+            elif payload.age_years > 0:
+                # Young's: [age / (age + 12)] × adult_dose (cannot use for age 0)
+                factor = payload.age_years / (payload.age_years + 12.0)
+                estimated = round(factor * adult_dose)
+                rec_min = max(0, round(estimated * 0.75))
+                rec_max = round(estimated * 1.25)
+                max_daily = min(rec_max, round(adult_dose * 1.0))
+                calc_method = "youngs_rule"
+                if payload.chosen_dose_mg_per_day < rec_min:
+                    warnings_list.append("Dose below Young's Rule estimate (±25% tolerance)")
+                elif payload.chosen_dose_mg_per_day > rec_max:
+                    warnings_list.append("Dose exceeds Young's Rule estimate (±25% tolerance)")
+
+        if not warnings_list and adult_dose is None:
+            # No adult dose available - cannot apply Clark's/Young's
+            warnings_list = ["No formulary rule found; clinician review required"]
+            guideline_ref = get_dose_guideline_reference(use_clarks=True)
+
+        # Safe when no warnings (dose in range) or when we only have "clinician review" fallback
+        safe_unknown = len(warnings_list) == 0 or "clinician review" in str(warnings_list[0]).lower()
         response = DoseCheckResponse(
-            safe=True,
-            warnings=["No formulary rule found for drug; clinician review required"],
-            recommended_range_mg_per_day={"min": 0, "max": payload.chosen_dose_mg_per_day},
-            max_mg_per_day=payload.chosen_dose_mg_per_day,
+            safe=safe_unknown,
+            warnings=warnings_list,
+            recommended_range_mg_per_day={"min": rec_min, "max": rec_max},
+            max_mg_per_day=max_daily,
             event_id=event_id,
             allow_override=True,
+            guideline_reference=guideline_ref,
+            calculation_method=calc_method,
         )
         log_dose_check(
             event_id=event_id,
@@ -127,6 +186,7 @@ def dose_check_route(
         max_mg_per_day=max_daily,
         event_id=event_id,
         allow_override=True,
+        calculation_method="formulary",
     )
     log_dose_check(
         event_id=event_id,

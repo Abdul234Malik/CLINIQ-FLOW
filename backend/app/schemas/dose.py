@@ -26,3 +26,5 @@ class DoseCheckResponse(BaseModel):
     max_mg_per_day: int
     event_id: str
     allow_override: bool
+    guideline_reference: str | None = None
+    calculation_method: str | None = None  # "formulary" | "clarks_rule" | "youngs_rule"

@@ -53,6 +53,15 @@ Optional:
 | `HF_TOKEN` | For ASR recording (Whisper + pyannote) |
 | `ASR_ENGINE` | `whisper` to enable recording |
 
+### ASR / model files (Whisper, pyannote)
+
+The heavy model files (~200–400 MB) are **not in the repo**. They download automatically **on first use** when someone runs a transcription (e.g. via the doctor consultation flow with recording enabled).
+
+- **Requirements:** `HF_TOKEN` (Hugging Face token) in `.env` + `ASR_ENGINE=whisper`
+- **Where they go:** Cached in `backend/model_cache/` (this folder is gitignored)
+- **First run:** The first transcription may be slow (~1–2 min) while models download
+- **No pre-download step:** Run the app as usual; models fetch when needed
+
 ---
 
 ## 4. Run the Backend
