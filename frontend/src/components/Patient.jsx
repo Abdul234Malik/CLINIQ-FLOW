@@ -241,12 +241,8 @@ const ConsultationRoom = ({ patient, onSave, onCancel }) => {
     };
     const isSafe = result.safe || skipCheck;
     const needsOverride = !result.safe && !skipCheck;
-    if (needsOverride) {
-      toast.error("Please adjust dose or override with reason");
-      return;
-    }
-    if (!skipCheck && !result.safe && !overrideReason.trim()) {
-      toast.error("Enter override reason");
+    if (needsOverride && !overrideReason.trim()) {
+      toast.error("Please enter override reason");
       return;
     }
     setPrescriptions((prev) => [
