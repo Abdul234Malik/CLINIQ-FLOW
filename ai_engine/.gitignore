@@ -1,0 +1,23 @@
+# Environment (never commit secrets)
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtualenvs
+venv/
+.venv/
+env/
+
+# Local artifacts
+model_cache/
+.pytest_tmp/
