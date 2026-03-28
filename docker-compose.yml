@@ -1,0 +1,103 @@
+# Docker Compose Configuration - Start all 3 services
+# Usage: docker-compose up
+#
+# Note: This is for development/staging. Production uses K8s or serverless deployment.
+# 
+# STRUCTURE: Only 3 independent services
+# - Frontend (port 3000) — React UI
+# - Backend (port 8000) — Business logic + owns shared models
+# - AI Engine (port 8001) — NLP/ASR/RAG services (imports shared models from backend/app/shared)
+
+version: '3.8'
+
+services:
+  # =========================================================================
+  # FRONTEND - React app on port 3000
+  # =========================================================================
+  frontend:
+    build: ./frontend
+    container_name: cliniq-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Frontend calls Backend API on port 8000
+      VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - cliniq-network
+    restart: unless-stopped
+
+  # =========================================================================
+  # BACKEND - FastAPI on port 8000 (Business Logic + Shared Models)
+  # =========================================================================
+  backend:
+    build: ./backend
+    container_name: cliniq-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Supabase configuration (shared with AI Engine)
+      SUPABASE_URL=${SUPABASE_URL}
+      SUPABASE_KEY=${SUPABASE_KEY}
+      DATABASE_URL_SUPABASE=${DATABASE_URL_SUPABASE}
+
+      # Backend calls AI Engine on port 8001
+      # AI_ENGINE_URL uses internal Docker network hostname
+      AI_ENGINE_URL=http://ai_engine:8001
+      AI_ENGINE_TOKEN=${AI_ENGINE_TOKEN}
+
+      # Backend config
+      BACKEND_PORT=8000
+      DEBUG=${DEBUG:-False}
+      LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - ai_engine
+    networks:
+      - cliniq-network
+    restart: unless-stopped
+    # Health check to verify backend is responding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # =========================================================================
+  # AI ENGINE - FastAPI on port 8001 (NLP/ASR/RAG Services)
+  # =========================================================================
+  ai_engine:
+    build: ./ai_engine
+    container_name: cliniq-ai-engine
+    ports:
+      - "8001:8001"
+    environment:
+      # Supabase configuration (shared with Backend)
+      SUPABASE_URL=${SUPABASE_URL}
+      SUPABASE_KEY=${SUPABASE_KEY}
+      DATABASE_URL_SUPABASE=${DATABASE_URL_SUPABASE}
+
+      # OpenAI API (required for LLM-based NLP services)
+      OPENAI_API_KEY=${OPENAI_API_KEY}
+
+      # AI Engine config
+      AI_ENGINE_TOKEN=${AI_ENGINE_TOKEN}
+      AI_ENGINE_PORT=8001
+      DEBUG=${DEBUG:-False}
+      LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - cliniq-network
+    restart: unless-stopped
+    # Health check to verify AI Engine is responding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Internal Docker network for service-to-service communication
+networks:
+  cliniq-network:
+    driver: bridge

@@ -12,9 +12,9 @@ from contextlib import asynccontextmanager
 from app.api.admin_routes import router as admin_routes_router
 from app.api.clinical_routes import router as clinical_routes_router
 from app.api.doctor_routes import router as doctor_routes_router
-from app.api.nlp_routes import router as nlp_router
+# NOTE: NLP routes moved to AI Engine (port 8001). Backend calls via REST API.
 from app.api.nurse_routes import router as nurse_routes_router
-from app.api.orchestration_routes import router as orchestration_routes_router
+from app.api.orchestration_routes import router as orchestration_routes_router  # Calls AI Engine endpoints
 from app.api.record_officer_routes import register_router as record_officer_register_router
 from app.api.record_officer_routes import router as record_officer_routes_router
 from app.api.router import api_router
@@ -24,29 +24,14 @@ from app.utils.errors import error_payload
 
 load_dotenv()
 
-# ASR routes optional (require torch, transformers, pyannote, etc.); use stubs if import fails
+# NOTE: ASR routes moved to AI Engine (port 8001). Backend calls via REST API.
+# Removed ASR imports (torch, transformers, pyannote) - handled by AI Engine
 _asr_limiter = None
-try:
-    from app.api.asr_routes import translate_router, conversation_router, lifespan
-    from app.services.asr.post_process import limiter as _asr_limiter
-except Exception:
-    translate_router = APIRouter(prefix="/translate", tags=["Translation"])
-    conversation_router = APIRouter(prefix="/conversation", tags=["Conversation"])
 
-    @translate_router.post("/chunk")
-    async def _stub_chunk(auth: AuthContext = Depends(require_role("doctor", "nurse", "admin"))):
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "ASR not available",
-                "detail": "Install ASR deps: pip install torch transformers pyannote.audio pydub. Add HF_TOKEN to .env.",
-            },
-        )
-
-    @asynccontextmanager
-    async def lifespan(app):
-        yield
+# Simple lifespan (no ASR initialization needed in backend)
+@asynccontextmanager
+async def lifespan(app):
+    yield
 
 
 app = FastAPI(
@@ -74,56 +59,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Hamids router for ASR
-app.include_router(translate_router)
-app.include_router(conversation_router)
+# NOTE: ASR routers removed (moved to AI Engine on port 8001)
 
-# Malik router kept active for Supabase-first endpoints under /api.
+# Supabase-first endpoints under /api
 app.include_router(api_router, prefix="/api")
 
-# Existing NLP service endpoints.
-app.include_router(nlp_router)
+# NOTE: NLP service endpoints removed (moved to AI Engine on port 8001)
 
-# Legacy import kept for reference:
-# from app.api.asr_routes import router as asr_router
-# Commented out because ASR module can fail import/startup in API mode.
-try:
-    from app.api.asr_routes import router as asr_router
-except Exception:
-    asr_router = APIRouter(prefix="/asr", tags=["ASR"])
+# NOTE: ASR endpoints moved to AI Engine (port 8001)
+# Frontend → Backend (/ai/*) → AI Engine (port 8001)
+# No stub needed - requests go to AI Engine directly via orchestration_routes
 
-    class ASRTranscribeRequest(BaseModel):
-        audio_base64: str | None = None
-        transcript_hint: str | None = None
-        language: str | None = Field(default="en")
-
-    @asr_router.post("/transcribe")
-    async def transcribe_route(
-        payload: ASRTranscribeRequest,
-        auth: AuthContext = Depends(require_role("nurse", "doctor", "admin")),
-    ):
-        _ = auth
-        transcript = (payload.transcript_hint or "").strip()
-        if not transcript:
-            raise HTTPException(
-                status_code=422,
-                detail=error_payload(
-                    "VALIDATION_ERROR",
-                    "Either transcript_hint or audio_base64 is required",
-                    None,
-                ),
-            )
-        return {
-            "transcript": transcript,
-            "confidence": 0.75,
-            "language": payload.language or "en",
-            "engine": "stub_asr",
-        }
-
-# Contract-compatible route stack retained for frontend/test compatibility.
+# Register all business logic routers
 app.include_router(admin_routes_router, prefix="/admin", tags=["Admin"])
-app.include_router(asr_router)
-app.include_router(orchestration_routes_router, prefix="/ai", tags=["Orchestration"])
+app.include_router(orchestration_routes_router, prefix="/ai", tags=["Orchestration"])  # Calls AI Engine
 app.include_router(clinical_routes_router)
 app.include_router(nurse_routes_router)
 app.include_router(record_officer_register_router)  # /register-patient (avoids /patients/{id} conflict)
