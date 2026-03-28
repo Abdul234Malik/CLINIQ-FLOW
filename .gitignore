@@ -1,0 +1,33 @@
+
+# Environment
+/venv
+.env
+.env.local
+.env.*.local
+.env.prod
+.env.dev
+.env.staging
+
+# Python (catches venv anywhere in repo)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Data
+data/
+*.db
+model_cache/

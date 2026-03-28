@@ -2,31 +2,31 @@
 
 This file exposes core demo AI actions:
 intake processing, dose checks, triage-only, and summary-only requests.
+
+NOTE: Routes here call the AI Engine (port 8001) via REST API.
 """
 
 from __future__ import annotations
 
 import uuid
+import os
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.schemas.dose import DoseCheckRequest, DoseCheckResponse
-from app.schemas.intake import IntakeRequest
-from app.services.nlp.soap_formatter import SOAPFormatter
-from app.services.nlp.symptom_extractor import SymptomExtractor
-from app.services.orchestration.pipeline import process_intake
-from app.services.rag.retriever import (
-    CLARKS_RULE_FORMULA,
-    YOUNGS_RULE_FORMULA,
-    get_dose_guideline_reference,
-)
+# Import shared models from local app.shared package
+from app.shared import DoseCheckRequest, DoseCheckResponse, IntakeRequest
 from app.utils.auth import AuthContext
 from app.utils.auth import require_role
 from app.utils.errors import error_payload
 from app.utils.storage import add_audit_log
 from app.utils.storage import create_intake_record
 from app.utils.storage import log_dose_check
+
+# AI Engine configuration
+AI_ENGINE_URL = os.getenv("AI_ENGINE_URL", "http://localhost:8001")
+AI_ENGINE_TOKEN = os.getenv("AI_ENGINE_TOKEN", "dev-secret-key")
 
 router = APIRouter()
 
@@ -59,12 +59,30 @@ class SummaryRequest(BaseModel):
 
 
 @router.post("/process_intake")
-def process_intake_route(
+async def process_intake_route(
     payload: IntakeRequest,
     auth: AuthContext = Depends(require_role("nurse", "doctor", "admin")),
 ):
+    """Call AI Engine to process patient intake and generate clinical summary."""
     try:
-        response = process_intake(payload.model_dump())
+        # Call AI Engine
+        async with httpx.AsyncClient() as client:
+            ai_response = await client.post(
+                f"{AI_ENGINE_URL}/nlp/process_intake",
+                json=payload.model_dump(),
+                headers={"Authorization": f"Bearer {AI_ENGINE_TOKEN}"},
+                timeout=30.0,
+            )
+        
+        if ai_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=error_payload("AI_ENGINE_ERROR", "AI Engine unavailable", ai_response.text),
+            )
+        
+        response = ai_response.json()
+        
+        # Log to backend audit trail
         create_intake_record(
             intake_id=str(uuid.uuid4()),
             visit_id=payload.visit_id,
@@ -81,9 +99,14 @@ def process_intake_route(
             action="process_intake",
             entity_type="visit",
             entity_id=payload.visit_id,
-            metadata={"audit_event_id": response.get("audit_event_id")},
+            metadata={"service": "ai_engine"},
         )
         return response
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=error_payload("AI_ENGINE_UNREACHABLE", "Unable to reach AI Engine", str(exc)),
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -200,33 +223,33 @@ def dose_check_route(
 
 
 @router.post("/summary")
-def summary_route(
-    payload: SummaryRequest,
+async def summary_route(
+    payload: "SummaryRequest",
     auth: AuthContext = Depends(require_role("nurse", "doctor", "admin")),
 ):
+    """Call AI Engine to generate SOAP summary from transcript."""
     _ = auth
     try:
-        extractor = SymptomExtractor()
-        formatter = SOAPFormatter()
-        structured_data, _ = extractor.extract(
-            transcript=payload.transcript,
-            session_id=f"visit-{payload.visit_id}",
-            patient_age=payload.patient_age,
-            patient_sex=payload.patient_sex,
-        )
-        soap_note = formatter.format(structured_data)
-        return {
-            "visit_id": payload.visit_id,
-            "summary": {
-                "soap": {
-                    "S": soap_note.subjective,
-                    "O": soap_note.objective,
-                    "A": soap_note.assessment,
-                    "P": soap_note.plan,
-                },
-                "disclaimer": soap_note.disclaimer,
-            },
-        }
+        async with httpx.AsyncClient() as client:
+            ai_response = await client.post(
+                f"{AI_ENGINE_URL}/nlp/summary",
+                json=payload.model_dump(),
+                headers={"Authorization": f"Bearer {AI_ENGINE_TOKEN}"},
+                timeout=30.0,
+            )
+        
+        if ai_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=error_payload("AI_ENGINE_ERROR", "AI Engine unavailable", ai_response.text),
+            )
+        
+        return ai_response.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=error_payload("AI_ENGINE_UNREACHABLE", "Unable to reach AI Engine", str(exc)),
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
