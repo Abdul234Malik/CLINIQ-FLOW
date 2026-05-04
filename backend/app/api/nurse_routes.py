@@ -22,6 +22,7 @@ from app.services.orchestration.pipeline import process_intake
 from app.utils.auth import AuthContext
 from app.utils.auth import require_role
 from app.utils.errors import error_payload
+from app.utils.pydantic_compat import model_to_dict
 from app.utils.storage import add_audit_log
 from app.utils.storage import create_intake_record
 from app.utils.storage import get_latest_intake
@@ -95,7 +96,7 @@ def process_intake_route(
     auth: AuthContext = Depends(require_role("nurse", "admin")),
 ):
     try:
-        response = process_intake(payload.model_dump())
+        response = process_intake(dict(model_to_dict(payload)))
         create_intake_record(
             intake_id=str(uuid.uuid4()),
             visit_id=payload.visit_id,

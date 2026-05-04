@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ai_engine.app.api.router import router
+from app.api.router import router
 import os
 from dotenv import load_dotenv
 

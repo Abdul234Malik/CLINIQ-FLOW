@@ -362,11 +362,17 @@ def _convert_to_wav_subprocess(input_path: str, output_path: str, sample_rate: i
         raise RuntimeError(f"ffmpeg failed: {result.stderr or result.stdout or 'unknown'}")
 
 
-# Translation router 
+# Translation router
 translate_router = APIRouter(prefix="/translate", tags=["Translation"])
 
 #  Conversation router
 conversation_router = APIRouter(prefix="/conversation", tags=["Conversation"])
+
+# Mount both ASR sub-routers under a single `/asr/*` prefix so the main app can
+# include this module safely.
+router = APIRouter(prefix="/asr", tags=["ASR"])
+router.include_router(translate_router)
+router.include_router(conversation_router)
 
 
 #  Translation endpoints 

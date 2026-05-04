@@ -62,7 +62,8 @@ def _get_supabase_client():
         ) from exc
 
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
+    # Backwards-compatible: project anon key may be provided as SUPABASE_KEY.
+    supabase_anon_key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
 
     if not supabase_url or not supabase_anon_key:
         raise HTTPException(

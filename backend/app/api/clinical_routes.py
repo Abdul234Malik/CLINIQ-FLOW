@@ -21,11 +21,15 @@ from app.services.nlp.validators import ClinicalValidator
 from app.utils.auth import AuthContext
 from app.utils.auth import require_role
 from app.utils.errors import error_payload
+from app.utils.pydantic_compat import model_to_dict
 from app.database.supabase import supabase
 from app.services import patient_service
 from app.services import visit_service
 from app.utils.storage import add_audit_log
+from app.utils.storage import create_patient as local_create_patient
 from app.utils.storage import create_doctor_conversation
+from app.utils.storage import create_visit as local_create_visit
+from app.utils.storage import get_patient as local_get_patient
 from app.utils.storage import get_latest_doctor_conversation
 from app.utils.storage import get_latest_intake
 
@@ -99,6 +103,24 @@ def create_patient_route(
     auth: AuthContext = Depends(require_role("record_officer", "nurse", "doctor", "admin")),
 ):
     """Create patient in Supabase. Minimal schema (matches record-officer quick registration)."""
+    if supabase is None:
+        row = local_create_patient(
+            patient_id=str(uuid.uuid4()),
+            full_name=payload.full_name.strip(),
+            date_of_birth=payload.date_of_birth,
+            gender=payload.gender,
+            phone=payload.phone,
+        )
+        add_audit_log(
+            audit_id=str(uuid.uuid4()),
+            actor_role=auth.role,
+            action="create_patient",
+            entity_type="patient",
+            entity_id=row.get("id", ""),
+            metadata={"full_name": payload.full_name},
+        )
+        return {**row, "created_at": row.get("created_at", "")}
+
     parts = payload.full_name.strip().split(maxsplit=1)
     first_name = parts[0] if parts else payload.full_name
     last_name = parts[1] if len(parts) > 1 else ""
@@ -139,6 +161,11 @@ async def get_patient_route(
     auth: AuthContext = Depends(require_role("record_officer", "nurse", "doctor", "admin")),
 ):
     _ = auth
+    if supabase is None:
+        patient = local_get_patient(patient_id)
+        if not patient:
+            raise HTTPException(status_code=404, detail=error_payload("NOT_FOUND", "Patient not found", {"patient_id": patient_id}))
+        return patient
     try:
         patient = await patient_service.get_patient_by_id(patient_id)
     except Exception:
@@ -152,6 +179,20 @@ async def create_visit_route(
     auth: AuthContext = Depends(require_role("record_officer", "nurse", "doctor", "admin")),
 ):
     """Create visit in Supabase. Status: WAITING_FOR_TRIAGE."""
+    if supabase is None:
+        patient = local_get_patient(payload.patient_id)
+        if not patient:
+            raise HTTPException(status_code=404, detail=error_payload("NOT_FOUND", "Patient not found", {"patient_id": payload.patient_id}))
+        visit = local_create_visit(visit_id=str(uuid.uuid4()), patient_id=payload.patient_id, visit_status=payload.visit_status or "open")
+        add_audit_log(
+            audit_id=str(uuid.uuid4()),
+            actor_role=auth.role,
+            action="create_visit",
+            entity_type="visit",
+            entity_id=visit.get("id", ""),
+            metadata={"patient_id": payload.patient_id},
+        )
+        return visit
     try:
         patient = await patient_service.get_patient_by_id(payload.patient_id)
     except Exception:
@@ -279,7 +320,7 @@ def doctor_conversation_route(
         conversation_id=conversation_id,
         visit_id=visit_id,
         transcript=payload.transcript,
-        structured_json=structured_data.model_dump(mode="json"),
+        structured_json=dict(model_to_dict(structured_data, mode="json")),
         soap_json={
             "subjective": soap_note.subjective,
             "objective": soap_note.objective,
@@ -288,7 +329,7 @@ def doctor_conversation_route(
             "disclaimer": soap_note.disclaimer,
         },
         urgency_json=urgency,
-        validation_json=validation.model_dump(mode="json"),
+        validation_json=dict(model_to_dict(validation, mode="json")),
         audio_reference=payload.audio_reference,
     )
     add_audit_log(

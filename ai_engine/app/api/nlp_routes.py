@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.models.clinical_schema import (
+from app.shared.clinical_schema import (
     NLPRequest,
     NLPResponse,
     SOAPNote,
@@ -30,8 +30,11 @@ from app.services.nlp.symptom_extractor import SymptomExtractor
 from app.services.nlp.validators import ClinicalValidator
 from app.services.nlp.vitals_urgency import default_urgency_stub
 from app.services.nlp.vitals_urgency import score_vitals_urgency
+from app.services.orchestration.pipeline import process_intake as process_intake_pipeline
+from app.services.rag.guardrails import apply_guardrails
+from app.shared import IntakeRequest
 
-router = APIRouter(prefix="/nlp", tags=["NLP & Clinical Structuring"])
+router = APIRouter(tags=["NLP & Clinical Structuring"])
 
 # Singletons — initialised once at startup
 _extractor = SymptomExtractor()
@@ -97,6 +100,13 @@ class FullProcessRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class SummaryRequest(BaseModel):
+    visit_id: str = Field(...)
+    transcript: str = Field(..., min_length=3)
+    patient_age: Optional[str] = None
+    patient_sex: Optional[str] = None
+
+
 class NLPResponseWithUrgency(BaseModel):
     """Extended response with urgency scoring."""
     session_id: str
@@ -109,6 +119,53 @@ class NLPResponseWithUrgency(BaseModel):
 
 
 # Routes
+@router.post(
+    "/process_intake",
+    summary="Backend-compatible intake processing",
+    description="Contract endpoint used by Backend `/ai/process_intake` to generate triage + SOAP summary.",
+)
+async def process_intake_contract(payload: IntakeRequest) -> dict:
+    return process_intake_pipeline(payload.dict())
+
+
+@router.post(
+    "/summary",
+    summary="Backend-compatible SOAP summary",
+    description="Contract endpoint used by Backend `/ai/summary` to generate SOAP note from transcript.",
+)
+async def summary_contract(payload: SummaryRequest) -> dict:
+    structured_data, _method = _extractor.extract(
+        transcript=payload.transcript,
+        session_id=f"visit-{payload.visit_id}",
+        patient_age=payload.patient_age,
+        patient_sex=payload.patient_sex,
+    )
+    soap_note = _formatter.format(structured_data)
+    validation = _validator.validate_all(structured_data, soap_note)
+    safe = apply_guardrails("\n".join([
+        f"S: {soap_note.subjective}",
+        f"O: {soap_note.objective}",
+        f"A: {soap_note.assessment}",
+        f"P: {soap_note.plan}",
+    ]))
+    disclaimer = safe.get("disclaimer", soap_note.disclaimer)
+    response: dict = {
+        "visit_id": payload.visit_id,
+        "summary": {
+            "soap": {
+                "S": soap_note.subjective,
+                "O": soap_note.objective,
+                "A": soap_note.assessment,
+                "P": soap_note.plan,
+            },
+            "disclaimer": disclaimer,
+        },
+    }
+    if getattr(validation, "warnings", None):
+        response["validation_warnings"] = validation.warnings
+    return response
+
+
 @router.post(
     "/vitals-urgency",
     summary="Assess urgency from vital signs",

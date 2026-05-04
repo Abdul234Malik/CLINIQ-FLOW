@@ -15,6 +15,9 @@ from app.services import visit_service
 from app.utils.auth import AuthContext
 from app.utils.auth import require_role
 from app.utils.errors import error_payload
+from app.utils.storage import create_patient as local_create_patient
+from app.utils.storage import create_visit as local_create_visit
+from app.utils.storage import get_patient as local_get_patient
 
 router = APIRouter(prefix="/record-officer", tags=["Record Officer"])
 
@@ -131,6 +134,16 @@ def create_patient_route(
     auth: AuthContext = Depends(require_role("record_officer", "admin")),
 ):
     """Minimal patient creation. For full registration use /api/patients."""
+    if supabase is None:
+        row = local_create_patient(
+            patient_id=str(uuid.uuid4()),
+            full_name=payload.full_name.strip(),
+            date_of_birth=payload.date_of_birth,
+            gender=payload.gender,
+            phone=payload.phone,
+        )
+        return {**row, "created_at": row.get("created_at", "")}
+
     parts = payload.full_name.strip().split(maxsplit=1)
     first_name = parts[0] if parts else payload.full_name
     last_name = parts[1] if len(parts) > 1 else ""
@@ -267,6 +280,27 @@ async def create_visit_route(
     auth: AuthContext = Depends(require_role("record_officer", "admin")),
 ):
     """Create a new visit. Status: WAITING_FOR_TRIAGE, triage_status: PENDING."""
+    if supabase is None:
+        patient = local_get_patient(payload.patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=404,
+                detail=error_payload("NOT_FOUND", "Patient not found", {"patient_id": payload.patient_id}),
+            )
+        visit = local_create_visit(visit_id=str(uuid.uuid4()), patient_id=payload.patient_id, visit_status="WAITING_FOR_TRIAGE")
+        created_raw = visit.get("created_at") or ""
+        created = created_raw.isoformat() if hasattr(created_raw, "isoformat") else str(created_raw)
+        time_str = created[11:16] if len(created) >= 16 else created
+        return {
+            "visit_id": visit.get("id"),
+            "patient_id": payload.patient_id,
+            "patient_name": patient.get("full_name") or "Unknown",
+            "visit_status": visit.get("visit_status", "WAITING_FOR_TRIAGE"),
+            "triage_status": visit.get("triage_status", "PENDING"),
+            "created_at": created,
+            "visit_date": created[:10] if created else "",
+            "visit_time": time_str,
+        }
     try:
         patient = await patient_service.get_patient_by_id(payload.patient_id)
     except Exception:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from app.models.clinical_schema import (
+from app.shared.clinical_schema import (
     StructuredClinicalData,
     Symptom,
     VitalSign,

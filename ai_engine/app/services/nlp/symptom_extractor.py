@@ -23,7 +23,7 @@ load_dotenv()  # Load environment variables from .env file
 
 from pydantic import ValidationError
 
-from app.models.clinical_schema import (
+from app.shared.clinical_schema import (
     AllergyRecord,
     ClinicalFlag,
     ConfidenceLevel,

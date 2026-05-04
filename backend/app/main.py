@@ -15,6 +15,7 @@ from app.api.doctor_routes import router as doctor_routes_router
 # NOTE: NLP routes moved to AI Engine (port 8001). Backend calls via REST API.
 from app.api.nurse_routes import router as nurse_routes_router
 from app.api.orchestration_routes import router as orchestration_routes_router  # Calls AI Engine endpoints
+from app.api.asr_stub_routes import router as asr_stub_routes_router
 from app.api.record_officer_routes import register_router as record_officer_register_router
 from app.api.record_officer_routes import router as record_officer_routes_router
 from app.api.router import api_router
@@ -73,6 +74,7 @@ app.include_router(api_router, prefix="/api")
 # Register all business logic routers
 app.include_router(admin_routes_router, prefix="/admin", tags=["Admin"])
 app.include_router(orchestration_routes_router, prefix="/ai", tags=["Orchestration"])  # Calls AI Engine
+app.include_router(asr_stub_routes_router)
 app.include_router(clinical_routes_router)
 app.include_router(nurse_routes_router)
 app.include_router(record_officer_register_router)  # /register-patient (avoids /patients/{id} conflict)
